@@ -1,0 +1,19 @@
+{
+  "name": "fathom",
+  "module": "index.ts",
+  "type": "module",
+  "scripts" : {
+    "dev" : "bun run index.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "@types/selenium-webdriver": "^4.1.28",
+    "puppeteer": "^24.7.2",
+    "selenium-webdriver": "^4.31.0"
+  }
+}
