@@ -1,5 +1,5 @@
 import { Meeting } from "./Meeting";
 
-const newMeeting = new Meeting("muq-pfhp-jkb");
+const newMeeting = new Meeting(process.env.MEETING_ID!);
 
 newMeeting.joinMeeting();
