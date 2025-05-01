@@ -9,6 +9,7 @@
     "typescript": "^5.0.0"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.800.0",
     "@types/selenium-webdriver": "^4.1.28",
     "selenium-webdriver": "^4.31.0"
   }
