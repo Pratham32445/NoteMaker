@@ -17,6 +17,8 @@ until curl -s http://localhost:4444/wd/hub/status | jq -e '.value.ready == true'
     sleep 1
 done
 
+mkdir -p /app/recordings
+
 echo "Selenium Grid is ready."
 
 echo "Starting Bun app..."

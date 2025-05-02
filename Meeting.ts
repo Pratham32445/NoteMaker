@@ -12,7 +12,7 @@ export class Meeting {
     constructor(meetingId: string) {
         this.meetingId = meetingId;
         this.driver = null;
-        this.duration = 60 * 1000;
+        this.duration = (Number(process.env.DURATION) || 1) * 60 * 1000;
     }
 
     async joinMeeting() {
@@ -20,6 +20,7 @@ export class Meeting {
             console.log("Connecting to Google Meet...");
             await this.startMeet();
             await new Promise((resolve) => setTimeout(resolve, 10000));
+            this.monitorMeetingLive();
             await this.startRecording();
             await new Promise((resolve) => setTimeout(resolve, this.duration));
             await this.stopRecording();
@@ -64,18 +65,27 @@ export class Meeting {
     async startRecording() {
         const outputFile = `/app/recordings/meet_recording_${this.meetingId}.mp4`;
         const ffmpegArgs = [
-            '-y',
-            '-f', 'pulse',
-            '-i', 'record_sink.monitor',
-            '-f', 'x11grab',
-            '-r', '30',
-            '-s', '1280x720',
-            '-i', ':99',
-            '-c:v', 'libx264',
-            '-preset', 'ultrafast',
-            '-tune', 'zerolatency',
-            '-c:a', 'aac',
-            '-b:a', '128k',
+            "-y",
+            "-video_size", "1280x720",
+            "-framerate", "30",
+            "-f", "x11grab",
+            "-i", ":99.0",
+            "-f", "pulse",
+            "-i", "default",
+            "-c:v", "libx264",
+            "-preset", "faster",
+            "-tune", "film",
+            "-crf", "23",
+            "-g", "60",
+            "-profile:v", "main",
+            "-movflags", "+faststart",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-ar", "48000",
+            "-ac", "2",
+            "-threads", "4",
+            "-flush_packets", "1",
+            "-vf", "format=yuv420p",
             outputFile
         ];
         console.log(`[${this.meetingId}] Starting ffmpeg recording: ${ffmpegArgs.join(" ")}`);
@@ -86,14 +96,15 @@ export class Meeting {
     async stopRecording() {
         const process = Meeting.ffmpegProcesses[this.meetingId];
         if (process) {
-            console.log(`[${this.meetingId}] Stopping ffmpeg recording...`);
             process.kill("SIGINT");
             await new Promise((resolve) => {
                 process.on("close", resolve);
             });
-            saveToS3(this.meetingId);
-            this.driver?.quit();
-            console.log(`[${this.meetingId}] ffmpeg recording stopped.`);
+            await saveToS3(this.meetingId);
+            if (this.driver) {
+                await this.driver.quit();
+                this.driver = null;
+            }
             delete Meeting.ffmpegProcesses[this.meetingId];
         }
     }
@@ -140,6 +151,26 @@ export class Meeting {
             console.log("Admitted to meeting");
         } catch (error) {
             throw new Error("Admission timeout: Not let into meeting within 5 minutes");
+        }
+    }
+    async isMeetingLive() {
+        if (!this.driver) return null;
+        try {
+            const memberCountElem = await this.driver!.findElement(By.className('uGOf1d'));
+            const countText = await memberCountElem.getText();
+            return Number(countText);
+        } catch (error) {
+            console.log(`[${this.meetingId}] Error fetching member count:`, error);
+            return null;
+        }
+    }
+    async monitorMeetingLive() {
+        while (this.driver) {
+            const cnt = await this.isMeetingLive();
+            if (cnt != null && cnt == 1) {
+                await this.stopRecording(); break;
+            }
+            await new Promise(resolve => setTimeout(resolve, 5000));
         }
     }
 }

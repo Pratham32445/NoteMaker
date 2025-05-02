@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fathom-bot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fathom-bot
+  template:
+    metadata:
+      labels:
+        app: fathom-bot
+    spec:
+      containers:
+        - name: fathom-bot
+          image: pratham59/fathom:latest
+          env:
+            - name: DISPLAY
+              value: ":99"
+            - name: SCREEN_RES
+              value: "1280x720x24"
+            - name: SE_NODE_MAX_SESSIONS
+              value: "1"
+            - name: MEETING_ID
+              value: "meet_id_value"
+            - name: DURATION
+              value: "meet_duration"
+          ports:
+            - containerPort: 4444
+            - containerPort: 3000
+          volumeMounts:
+            - mountPath: /dev/shm
+              name: dshm
+            - mountPath: /app/recordings
+              name: recordings
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "0.5"
+            limits:
+              memory: "2Gi"
+              cpu: "1"
+          readinessProbe:
+            httpGet:
+              path: /wd/hub/status
+              port: 4444
+            initialDelaySeconds: 20
+            periodSeconds: 5
+      volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi
+        - name: recordings
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fathom-bot-service
+spec:
+  selector:
+    app: fathom-bot
+  ports:
+    - name: selenium
+      protocol: TCP
+      port: 4444
+      targetPort: 4444
+    - name: bun-app
+      protocol: TCP
+      port: 3000
+      targetPort: 3000
+  type: LoadBalancer

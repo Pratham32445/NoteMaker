@@ -12,18 +12,19 @@ const client = new S3Client({
 
 export async function saveToS3(videoId: string) {
     const filePath = path.join("/app/recordings", `meet_recording_${videoId}.mp4`)
-    console.log(filePath)
     const bucketName = process.env.BUCKET_NAME;
     try {
         const fileBuffer = await fs.readFile(filePath);
+        const date = new Date();
+        const fullDate = `${date.getDate()}-${date.getMonth()}-${date.getFullYear()}-${String(Date.now())}`
         const cmd = new PutObjectCommand({
             Bucket: bucketName,
-            Key: `recordings/${videoId}`,
-            Body : fileBuffer,
-            ContentType : "video/mp4"
+            Key: `recordings/${videoId}-${fullDate}`,
+            Body: fileBuffer,
+            ContentType: "video/mp4"
         })
         await client.send(cmd);
     } catch (error) {
-        console.log("some error occured",error);
+        console.log("some error occured", error);
     }
 }
