@@ -1,32 +1,44 @@
 import { Builder, Browser, By, until, WebDriver } from 'selenium-webdriver';
 import { Options } from "selenium-webdriver/chrome";
 import { spawn } from "child_process";
+import fs from "fs";
+import path from "path";
 import { saveToS3 } from './aws/storeToS3';
 
 export class Meeting {
     meetingId: string;
     driver: WebDriver | null;
     duration: number;
+    isJoined: boolean;
     isStopped: boolean;
+    timerId: NodeJS.Timeout | null;
     static ffmpegProcesses: { [meetingId: string]: any } = {};
 
     constructor(meetingId: string) {
         this.meetingId = meetingId;
         this.driver = null;
         this.duration = (Number(process.env.DURATION) || 1) * 60 * 1000;
+        this.isJoined = false;
         this.isStopped = false;
+        this.timerId = null;
     }
 
     async joinMeeting() {
         try {
+            console.log("Connecting to Google Meet...");
             await this.startMeet();
-            await this.waitBeforeAdmission();
+            await new Promise((resolve) => setTimeout(resolve, 10000));
             const isAdmitted = await this.waitForAdmission();
             if (isAdmitted) {
-                this.monitorMeetingLive();
                 await this.startRecording();
-                await this.meetingTimer();
-                await this.stopRecording();
+                this.monitorMeetingLive();
+                new Promise((resolve) => setTimeout(resolve, this.duration));
+                if (!this.isStopped) {
+                    await this.stopRecording();
+                }
+            }
+            else {
+                this.killProcess();
             }
         } catch (error) {
             console.error("Error in joinMeeting:", error);
@@ -67,7 +79,11 @@ export class Meeting {
     }
 
     async startRecording() {
-        const outputFile = `/app/meet_recording_${this.meetingId}.mp4`;
+        const recordingsDir = "/app/recordings";
+        if (!fs.existsSync(recordingsDir)) {
+            fs.mkdirSync(recordingsDir, { recursive: true });
+        }
+        const outputFile = `/app/recordings/meet_recording_${this.meetingId}.mp4`;
         const ffmpegArgs = [
             "-y",
             "-video_size", "1280x720",
@@ -92,25 +108,16 @@ export class Meeting {
             "-vf", "format=yuv420p",
             outputFile
         ];
+        console.log(`[${this.meetingId}] Starting ffmpeg recording: ${ffmpegArgs.join(" ")}`);
         const ffmpegProcess = spawn("ffmpeg", ffmpegArgs, { stdio: "inherit" });
         Meeting.ffmpegProcesses[this.meetingId] = ffmpegProcess;
     }
 
     async stopRecording() {
-        const process = Meeting.ffmpegProcesses[this.meetingId];
-        if (process && !this.isStopped) {
-            process.kill("SIGINT");
-            await new Promise((resolve) => {
-                process.on("close", resolve);
-            });
-            await saveToS3(this.meetingId);
-            this.isStopped = true;
-            if (this.driver) {
-                await this.driver.quit();
-                this.driver = null;
-            }
-            delete Meeting.ffmpegProcesses[this.meetingId];
-        }
+        if (this.isStopped) return;
+        await saveToS3(this.meetingId);
+        await this.killProcess();
+        this.isStopped = true;
     }
 
     async startMeet() {
@@ -168,27 +175,52 @@ export class Meeting {
     async isMeetingLive() {
         if (!this.driver) return null;
         try {
-            const memberCountElem = await this.driver!.findElement(By.className('uGOf1d'));
-            const countText = await memberCountElem.getText();
-            return Number(countText);
+            const parentElement = await this.driver.wait(
+                until.elementLocated(By.css('div.gFyGKf.BN1Lfc')),
+                10000
+            );
+            const countElement = await parentElement.findElement(By.css('div.uGOf1d'));
+            const countText = await countElement.getText();
+            const count = parseInt(countText, 10);
+            return Number.isNaN(count) ? null : count;
         } catch (error) {
-            console.log(`[${this.meetingId}] Error fetching member count:`, error);
+            console.log(`[${this.meetingId}] Participant counter not found`);
             return null;
         }
     }
     async monitorMeetingLive() {
-        while (this.driver) {
+        console.log(`[${this.meetingId}] Starting to monitor live participants...`);
+        while (this.driver && !this.isStopped) {
             const cnt = await this.isMeetingLive();
-            if (cnt != null && cnt == 1) {
-                await this.stopRecording(); break;
+            console.log(`[${this.meetingId}] Current participant count:`, cnt);
+            if (this.isStopped) break;
+            if (cnt != null && cnt <= 1) {
+                console.log(`[${this.meetingId}] Only 1 participant left, stopping recording.`);
+                if (this.timerId) {
+                    clearInterval(this.timerId);
+                    this.timerId = null;
+                }
+                if (!this.isStopped) {
+                    await this.stopRecording();
+                }
+                break;
             }
+            
             await new Promise(resolve => setTimeout(resolve, 5000));
         }
     }
-    async waitBeforeAdmission() {
-        return new Promise((resolve) => setTimeout(resolve, 10000));
-    }
-    async meetingTimer() {
-        return new Promise((resolve) => setTimeout(resolve, this.duration))
+    async killProcess() {
+        const process = Meeting.ffmpegProcesses[this.meetingId];
+        if (process) {
+            process.kill("SIGINT");
+            await new Promise((resolve) => {
+                process.on("close", resolve);
+            });
+            if (this.driver) {
+                await this.driver.quit();
+                this.driver = null;
+            }
+            delete Meeting.ffmpegProcesses[this.meetingId];
+        }
     }
 }

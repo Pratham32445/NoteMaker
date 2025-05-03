@@ -1,5 +1,6 @@
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import path from "path";
+import fsRead from "fs";
 import fs from "fs/promises"
 
 const client = new S3Client({
@@ -11,7 +12,7 @@ const client = new S3Client({
 })
 
 export async function saveToS3(videoId: string) {
-    const filePath = path.join("/app/recordings", `meet_recording_${videoId}.mp4`)
+    const filePath = path.join("/app", `meet_recording_${videoId}.mp4`)
     const bucketName = process.env.BUCKET_NAME;
     try {
         const fileBuffer = await fs.readFile(filePath);
