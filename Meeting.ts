@@ -8,12 +8,14 @@ export class Meeting {
     driver: WebDriver | null;
     duration: number;
     isStopped: boolean;
+    type: "AUDIO" | "VIDEO";
     static ffmpegProcesses: { [meetingId: string]: any } = {};
 
     constructor(meetingId: string) {
         this.meetingId = meetingId;
         this.driver = null;
         this.duration = (Number(process.env.DURATION) || 1) * 60 * 1000;
+        this.type = (process.env.RECORD_TYPE as "AUDIO" | "VIDEO") || "VIDEO";
         this.isStopped = false;
     }
 
@@ -67,31 +69,41 @@ export class Meeting {
     }
 
     async startRecording() {
-        const outputFile = `/app/meet_recording_${this.meetingId}.mp4`;
-        const ffmpegArgs = [
-            "-y",
-            "-video_size", "1280x720",
-            "-framerate", "30",
-            "-f", "x11grab",
-            "-i", ":99.0",
+        const outputFile = `/app/meet_recording_${this.meetingId}.${this.type == "VIDEO" ? "mp4" : "aac"}`;
+        const ffmpegArgs = ["-y"];
+        if (this.type === "VIDEO") {
+            ffmpegArgs.push(
+                "-video_size", "1280x720",
+                "-framerate", "30",
+                "-f", "x11grab",
+                "-i", ":99.0"
+            );
+        }
+        ffmpegArgs.push(
             "-f", "pulse",
-            "-i", "default",
-            "-c:v", "libx264",
-            "-preset", "faster",
-            "-tune", "film",
-            "-crf", "23",
-            "-g", "60",
-            "-profile:v", "main",
-            "-movflags", "+faststart",
+            "-i", "default"
+        );
+        if (this.type === "VIDEO") {
+            ffmpegArgs.push(
+                "-c:v", "libx264",
+                "-preset", "faster",
+                "-tune", "film",
+                "-crf", "23",
+                "-g", "60",
+                "-profile:v", "main",
+                "-movflags", "+faststart",
+                "-vf", "format=yuv420p"
+            );
+        } else {
+            ffmpegArgs.push("-vn");
+        }
+        ffmpegArgs.push(
             "-c:a", "aac",
             "-b:a", "192k",
             "-ar", "48000",
-            "-ac", "2",
-            "-threads", "4",
-            "-flush_packets", "1",
-            "-vf", "format=yuv420p",
-            outputFile
-        ];
+            "-ac", "2"
+        );
+        ffmpegArgs.push(outputFile);
         const ffmpegProcess = spawn("ffmpeg", ffmpegArgs, { stdio: "inherit" });
         Meeting.ffmpegProcesses[this.meetingId] = ffmpegProcess;
     }
@@ -103,7 +115,8 @@ export class Meeting {
             await new Promise((resolve) => {
                 process.on("close", resolve);
             });
-            await saveToS3(this.meetingId);
+            const extension = this.type == "AUDIO" ? "aac" : "mp4";
+            await saveToS3(this.meetingId, extension);
             this.isStopped = true;
             if (this.driver) {
                 await this.driver.quit();
@@ -191,4 +204,4 @@ export class Meeting {
     async meetingTimer() {
         return new Promise((resolve) => setTimeout(resolve, this.duration))
     }
-}
+}   
