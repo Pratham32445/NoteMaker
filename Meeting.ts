@@ -25,6 +25,7 @@ export class Meeting {
             await this.waitBeforeAdmission();
             const isAdmitted = await this.waitForAdmission();
             if (isAdmitted) {
+                this.monitorPopups();
                 this.monitorMeetingLive();
                 await this.startRecording();
                 await this.meetingTimer();
@@ -41,7 +42,7 @@ export class Meeting {
             "--disable-blink-features=AutomationControlled",
             "--use-fake-ui-for-media-stream",
             "--window-size=1280,720",
-            "--auto-select-desktop-capture-source=[RECORD]",
+            "--auto-select-desktop-capture-source='Entire screen'",
             "--no-sandbox",
             "--disable-popup-blocking",
             "--disable-notifications",
@@ -76,7 +77,7 @@ export class Meeting {
                 "-video_size", "1280x720",
                 "-framerate", "30",
                 "-f", "x11grab",
-                "-i", ":99.0"
+                "-i", ":99.0",
             );
         }
         ffmpegArgs.push(
@@ -85,6 +86,7 @@ export class Meeting {
         );
         if (this.type === "VIDEO") {
             ffmpegArgs.push(
+                "-vf", "crop=1280:720:0:0,format=yuv420p",
                 "-c:v", "libx264",
                 "-preset", "faster",
                 "-tune", "film",
@@ -92,7 +94,6 @@ export class Meeting {
                 "-g", "60",
                 "-profile:v", "main",
                 "-movflags", "+faststart",
-                "-vf", "format=yuv420p"
             );
         } else {
             ffmpegArgs.push("-vn");
@@ -129,6 +130,8 @@ export class Meeting {
     async startMeet() {
         const driver = await this.getDriver();
         this.driver = driver;
+        await driver.manage().window().maximize();
+        await driver.executeScript("window.focus();");
         const meetUrl = `https://meet.google.com/${this.meetingId}`;
         console.log("Opening Meet URL:", meetUrl);
         await driver.get(meetUrl);
@@ -196,6 +199,33 @@ export class Meeting {
                 await this.stopRecording(); break;
             }
             await new Promise(resolve => setTimeout(resolve, 5000));
+        }
+    }
+    async monitorPopups() {
+        if (!this.driver) return;
+        const popupInterval = setInterval(async () => {
+            if(!this.driver || this.isStopped) {
+                clearInterval(popupInterval);
+                return ;
+            }
+            await this.checkAndClosePopups();
+        },10000)
+    }
+    async checkAndClosePopups() {
+        const popupTexts = ["Got it", "Dismiss", "OK", "Close", "Understood"];
+        for (let text of popupTexts) {
+            try {
+                const popupButton = await this.driver!.findElement(
+                    By.xpath(`//button//span[contains(text(), "${text}")]`)
+                );
+                if (popupButton) {
+                    console.log(`[${this.meetingId}] Dismissing popup: ${text}`);
+                    await popupButton.click();
+                    await this.driver!.sleep(1000);
+                }
+            } catch (error) {
+                // popup not found
+            }
         }
     }
     async waitBeforeAdmission() {

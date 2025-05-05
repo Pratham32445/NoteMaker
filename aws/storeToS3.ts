@@ -1,6 +1,5 @@
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import path from "path";
-import fsRead from "fs";
 import fs from "fs/promises"
 
 const client = new S3Client({
