@@ -25,7 +25,7 @@ export class Meeting {
             await this.waitBeforeAdmission();
             const isAdmitted = await this.waitForAdmission();
             if (isAdmitted) {
-                this.monitorPopups();
+                if(this.type == "VIDEO") this.monitorPopups();
                 this.monitorMeetingLive();
                 await this.startRecording();
                 await this.meetingTimer();
