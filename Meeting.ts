@@ -9,6 +9,7 @@ export class Meeting {
     duration: number;
     isStopped: boolean;
     type: "AUDIO" | "VIDEO";
+    botName : string;
     static ffmpegProcesses: { [meetingId: string]: any } = {};
 
     constructor(meetingId: string) {
@@ -17,6 +18,7 @@ export class Meeting {
         this.duration = (Number(process.env.DURATION) || 1) * 60 * 1000;
         this.type = (process.env.RECORD_TYPE as "AUDIO" | "VIDEO") || "VIDEO";
         this.isStopped = false;
+        this.botName = process.env.NAME || "FATHOM";
     }
 
     async joinMeeting() {
@@ -25,7 +27,7 @@ export class Meeting {
             await this.waitBeforeAdmission();
             const isAdmitted = await this.waitForAdmission();
             if (isAdmitted) {
-                if(this.type == "VIDEO") this.monitorPopups();
+                if (this.type == "VIDEO") this.monitorPopups();
                 this.monitorMeetingLive();
                 await this.startRecording();
                 await this.meetingTimer();
@@ -149,7 +151,7 @@ export class Meeting {
                 until.elementLocated(By.xpath('//input[@placeholder="Your name"]')), 5000
             );
             await nameInput.clear();
-            await nameInput.sendKeys("Fathom");
+            await nameInput.sendKeys(this.botName);
             await driver.sleep(1000);
         } catch { }
 
@@ -193,23 +195,28 @@ export class Meeting {
         }
     }
     async monitorMeetingLive() {
-        while (this.driver) {
+        while (this.driver && !this.isStopped) {
+            if (await this.isRemovedFromMetting()) {
+                console.log("\n \n \n bot got removed from the meeting \n \n \n");
+                await this.stopRecording();
+                break;
+            }
             const cnt = await this.isMeetingLive();
             if (cnt != null && cnt == 1) {
                 await this.stopRecording(); break;
             }
-            await new Promise(resolve => setTimeout(resolve, 5000));
+            await new Promise(resolve => setTimeout(resolve, 3000));
         }
     }
     async monitorPopups() {
         if (!this.driver) return;
         const popupInterval = setInterval(async () => {
-            if(!this.driver || this.isStopped) {
+            if (!this.driver || this.isStopped) {
                 clearInterval(popupInterval);
-                return ;
+                return;
             }
             await this.checkAndClosePopups();
-        },10000)
+        }, 10000)
     }
     async checkAndClosePopups() {
         const popupTexts = ["Got it", "Dismiss", "OK", "Close", "Understood"];
@@ -226,6 +233,22 @@ export class Meeting {
             } catch (error) {
                 // popup not found
             }
+        }
+    }
+    async isRemovedFromMetting() {
+        if (!this.driver) return false;
+        try {
+            const removedMsg = await this.driver.findElement(
+                By.xpath('//*[contains(text(), "You’ve been removed") or contains(text(), "You have been removed")]'));
+            if (removedMsg) return true;
+        } catch (error) {
+            // continue
+        }
+        try {
+            await this.driver.findElement(By.css('button[aria-label="Leave call"]'));
+            return false;
+        } catch {
+            return true;
         }
     }
     async waitBeforeAdmission() {

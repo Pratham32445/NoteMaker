@@ -30,7 +30,7 @@ spec:
             - containerPort: 4444
             - containerPort: 3000
           volumeMounts:
-            - mountPath: /dev/shm
+            - mountPath: /dev/shm 
               name: dshm
             - mountPath: /app/recordings
               name: recordings
