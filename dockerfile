@@ -3,6 +3,7 @@ FROM selenium/standalone-chrome:4.31.0-20250414
 USER root
 RUN apt-get update && \
     apt-get install -y ffmpeg xvfb fluxbox x11vnc curl jq pulseaudio && \
+    mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix && \
     rm -rf /var/lib/apt/lists/*
 
 USER seluser

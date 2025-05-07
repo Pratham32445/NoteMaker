@@ -1,6 +1,7 @@
 import { Builder, Browser, By, until, WebDriver } from 'selenium-webdriver';
 import { Options } from "selenium-webdriver/chrome";
 import { spawn } from "child_process";
+import fs from "fs";
 import { saveToS3 } from './aws/storeToS3';
 
 export class Meeting {
@@ -12,6 +13,8 @@ export class Meeting {
     type: "AUDIO" | "VIDEO";
     botName: string;
     static ffmpegProcesses: { [meetingId: string]: any } = {};
+    segmentFiles: string[] = [];
+    segmentIndex: number = 0;
 
     constructor(meetingId: string) {
         this.meetingId = meetingId;
@@ -21,6 +24,11 @@ export class Meeting {
         this.isStopped = false;
         this.isPaused = false;
         this.botName = process.env.NAME || "FATHOM";
+    }
+
+    getOutputFileName(segmentIndex: number): string {
+        const ext = this.type === "VIDEO" ? "mp4" : "aac";
+        return `/app/segments/${this.meetingId}_part${segmentIndex}.${ext}`;
     }
 
     async joinMeeting() {
@@ -37,6 +45,7 @@ export class Meeting {
             }
         } catch (error) {
             console.error("Error in joinMeeting:", error);
+            await this.cleanUpOnError();
         }
     }
 
@@ -87,64 +96,113 @@ export class Meeting {
     }
 
     async startRecording() {
-        const outputFile = `/app/meet_recording_${this.meetingId}.${this.type == "VIDEO" ? "mp4" : "aac"}`;
-        const ffmpegArgs = ["-y"];
-        if (this.type === "VIDEO") {
-            const topOffset = 0;
-            const leftOffset = 0;
+        try {
+
+            if (!fs.existsSync("/app/segments")) fs.mkdirSync("/app/segments");
+
+            const outputFile = this.getOutputFileName(this.segmentIndex++);
+            this.segmentFiles.push(outputFile);
+
+            const ffmpegArgs = ["-y"];
+            if (this.type === "VIDEO") {
+                const topOffset = 0;
+                const leftOffset = 0;
+                ffmpegArgs.push(
+                    "-video_size", "1280x720",
+                    "-framerate", "30",
+                    "-f", "x11grab",
+                    "-i", `:99.0+${leftOffset},${topOffset}`,
+                );
+            }
             ffmpegArgs.push(
-                "-video_size", "1280x720",
-                "-framerate", "30",
-                "-f", "x11grab",
-                "-i", `:99.0+${leftOffset},${topOffset}`,
+                "-f", "pulse",
+                "-i", "default"
             );
-        }
-        ffmpegArgs.push(
-            "-f", "pulse",
-            "-i", "default"
-        );
-        if (this.type === "VIDEO") {
+            if (this.type === "VIDEO") {
+                ffmpegArgs.push(
+                    "-vf", "crop=1280:720:0:0,format=yuv420p",
+                    "-c:v", "libx264",
+                    "-preset", "faster",
+                    "-tune", "film",
+                    "-crf", "23",
+                    "-g", "60",
+                    "-profile:v", "main",
+                    "-movflags", "+faststart",
+                );
+            } else {
+                ffmpegArgs.push("-vn");
+            }
             ffmpegArgs.push(
-                "-vf", "crop=1280:720:0:0,format=yuv420p",
-                "-c:v", "libx264",
-                "-preset", "faster",
-                "-tune", "film",
-                "-crf", "23",
-                "-g", "60",
-                "-profile:v", "main",
-                "-movflags", "+faststart",
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-ar", "48000",
+                "-ac", "2"
             );
-        } else {
-            ffmpegArgs.push("-vn");
+            ffmpegArgs.push(outputFile);
+            const ffmpegProcess = spawn("ffmpeg", ffmpegArgs, { stdio: "inherit" });
+            ffmpegProcess.on('error', (err) => {
+                console.error(`[${this.meetingId}] ffmpeg process error:`, err);
+            });
+            ffmpegProcess.on('exit', (code, signal) => {
+                if (code !== 0) {
+                    console.error(`[${this.meetingId}] ffmpeg exited with code ${code} and signal ${signal}`);
+                }
+            });
+            Meeting.ffmpegProcesses[this.meetingId] = ffmpegProcess;
+        } catch (error) {
+            console.log("Error in Recording",error);
+            await this.cleanUpOnError();
         }
-        ffmpegArgs.push(
-            "-c:a", "aac",
-            "-b:a", "192k",
-            "-ar", "48000",
-            "-ac", "2"
-        );
-        ffmpegArgs.push(outputFile);
-        const ffmpegProcess = spawn("ffmpeg", ffmpegArgs, { stdio: "inherit" });
-        Meeting.ffmpegProcesses[this.meetingId] = ffmpegProcess;
     }
 
     async stopRecording() {
+        if (this.isStopped) return;
+
         const process = Meeting.ffmpegProcesses[this.meetingId];
-        if (process && !this.isStopped) {
+        if (process) {
             process.kill("SIGINT");
-            await new Promise((resolve) => {
-                process.on("close", resolve);
-            });
-            const extension = this.type == "AUDIO" ? "aac" : "mp4";
-            await saveToS3(this.meetingId, extension);
-            this.isStopped = true;
+            await new Promise((resolve) => process.on("close", resolve));
+            delete Meeting.ffmpegProcesses[this.meetingId];
+        }
+        this.isStopped = true;
+
+        if (!this.segmentFiles.length || !fs.existsSync(this.segmentFiles[0])) {
+            console.warn(`[${this.meetingId}] No recording segments found, nothing to upload.`);
             if (this.driver) {
                 await this.driver.quit();
                 this.driver = null;
             }
-            delete Meeting.ffmpegProcesses[this.meetingId];
-            console.log("\n \n \n all work done \n \n \n");
+            return;
         }
+
+        const ext = this.type === "AUDIO" ? "aac" : "mp4";
+        const finalFile = `/app/meet_recording_${this.meetingId}.${ext}`;
+
+        if (this.segmentFiles.length > 1) {
+            const listFile = `/app/segments/${this.meetingId}_concat.txt`;
+            fs.writeFileSync(listFile, this.segmentFiles.map(f => `file '${f}'`).join("\n"));
+            await new Promise((resolve) => {
+                const proc = spawn("ffmpeg", [
+                    "-f", "concat",
+                    "-safe", "0",
+                    "-i", listFile,
+                    "-c", "copy",
+                    finalFile
+                ], { stdio: "inherit" });
+                proc.on("close", resolve);
+            });
+        } else {
+            fs.renameSync(this.segmentFiles[0], finalFile);
+        }
+
+        await saveToS3(this.meetingId, ext);
+
+        if (this.driver) {
+            await this.driver.quit();
+            this.driver = null;
+        }
+
+        console.log("\n \n \n all work done \n \n \n");
     }
 
     async startMeet() {
@@ -228,7 +286,7 @@ export class Meeting {
         }
         return false;
     }
-    
+
     async isMeetingLive() {
         if (!this.driver) return null;
         try {
@@ -240,7 +298,7 @@ export class Meeting {
             return null;
         }
     }
-    
+
     async monitorMeetingLive() {
         while (this.driver && !this.isStopped) {
             if (await this.isRemovedFromMetting()) {
@@ -256,7 +314,7 @@ export class Meeting {
             await new Promise(resolve => setTimeout(resolve, 3000));
         }
     }
-    
+
     async monitorPopups() {
         if (!this.driver) return;
         const popupInterval = setInterval(async () => {
@@ -267,7 +325,7 @@ export class Meeting {
             await this.checkAndClosePopups();
         }, 10000)
     }
-    
+
     async checkAndClosePopups() {
         const popupTexts = ["Got it", "Dismiss", "OK", "Close", "Understood"];
         for (let text of popupTexts) {
@@ -285,7 +343,7 @@ export class Meeting {
             }
         }
     }
-    
+
     async isRemovedFromMetting() {
         if (!this.driver) return false;
         try {
@@ -302,11 +360,41 @@ export class Meeting {
             return true;
         }
     }
-    
+
+    async pauseRecording() {
+        if (this.isPaused) return;
+        console.log(`[${this.meetingId}] Pausing recording...`);
+        const process = Meeting.ffmpegProcesses[this.meetingId];
+        if (process) {
+            process.kill("SIGINT");
+            await new Promise(resolve => process.on("close", resolve));
+            delete Meeting.ffmpegProcesses[this.meetingId];
+            this.isPaused = true;
+        }
+    }
+
+    async resumeRecording() {
+        if (!this.isPaused) return;
+        console.log(`[${this.meetingId}] Resuming recording...`);
+        await this.startRecording();
+        this.isPaused = false;
+    }
+
+    async cleanUpOnError() {
+        try {
+            if (this.driver) {
+                await this.driver.quit();
+                this.driver = null;
+            }
+        } catch (err) {
+            console.error("Error during cleanup:", err);
+        }
+    }
+
     async waitBeforeAdmission() {
         return new Promise((resolve) => setTimeout(resolve, 10000));
     }
-    
+
     async meetingTimer() {
         return new Promise((resolve) => setTimeout(resolve, this.duration))
     }
