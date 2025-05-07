@@ -8,8 +8,9 @@ export class Meeting {
     driver: WebDriver | null;
     duration: number;
     isStopped: boolean;
+    isPaused: boolean;
     type: "AUDIO" | "VIDEO";
-    botName : string;
+    botName: string;
     static ffmpegProcesses: { [meetingId: string]: any } = {};
 
     constructor(meetingId: string) {
@@ -18,6 +19,7 @@ export class Meeting {
         this.duration = (Number(process.env.DURATION) || 1) * 60 * 1000;
         this.type = (process.env.RECORD_TYPE as "AUDIO" | "VIDEO") || "VIDEO";
         this.isStopped = false;
+        this.isPaused = false;
         this.botName = process.env.NAME || "FATHOM";
     }
 
@@ -41,17 +43,23 @@ export class Meeting {
     async getDriver() {
         const options = new Options();
         options.addArguments(
-            "--disable-blink-features=AutomationControlled",
             "--use-fake-ui-for-media-stream",
             "--window-size=1280,720",
-            "--auto-select-desktop-capture-source='Entire screen'",
+            "--auto-select-desktop-capture-source=' Entire screen'",
             "--no-sandbox",
             "--disable-popup-blocking",
             "--disable-notifications",
             "--disable-dev-shm-usage",
             "--disable-gpu",
             "--disable-infobars",
+            "--start-fullscreen",
+            "--app=https://meet.google.com",
+            "--disable-blink-features=AutomationControlled",
+            "--disable-extensions",
+            "--disable-features=ChromeWhatsNewUI"
         );
+
+        options.excludeSwitches('enable-automation');
 
         options.setUserPreferences({
             "profile.default_content_setting_values.notifications": 2,
@@ -64,22 +72,31 @@ export class Meeting {
         const seleniumUrl = "http://localhost:4444/wd/hub";
         console.log("Connecting to Selenium at:", seleniumUrl);
 
-        return await new Builder()
+        const driver = await new Builder()
             .forBrowser(Browser.CHROME)
             .setChromeOptions(options)
             .usingServer(seleniumUrl)
             .build();
+
+        await driver.executeScript(`
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+        `);
+        return driver;
     }
 
     async startRecording() {
         const outputFile = `/app/meet_recording_${this.meetingId}.${this.type == "VIDEO" ? "mp4" : "aac"}`;
         const ffmpegArgs = ["-y"];
         if (this.type === "VIDEO") {
+            const topOffset = 0;
+            const leftOffset = 0;
             ffmpegArgs.push(
                 "-video_size", "1280x720",
                 "-framerate", "30",
                 "-f", "x11grab",
-                "-i", ":99.0",
+                "-i", `:99.0+${leftOffset},${topOffset}`,
             );
         }
         ffmpegArgs.push(
@@ -126,6 +143,7 @@ export class Meeting {
                 this.driver = null;
             }
             delete Meeting.ffmpegProcesses[this.meetingId];
+            console.log("\n \n \n all work done \n \n \n");
         }
     }
 
@@ -138,6 +156,33 @@ export class Meeting {
         console.log("Opening Meet URL:", meetUrl);
         await driver.get(meetUrl);
         await driver.sleep(1000);
+        await driver.executeScript(`
+            // Hide webdriver flags
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+
+            // Hide automation-controlled warning
+            if (window.chrome) {
+                window.chrome.csi = function() {};
+                window.chrome.loadTimes = function() {};
+                window.chrome.app = {
+                    isInstalled: false,
+                };
+                window.chrome.runtime = {};
+            }
+
+            // Request fullscreen
+            if (document.documentElement.requestFullscreen) {
+                document.documentElement.requestFullscreen();
+            } else if (document.documentElement.mozRequestFullScreen) {
+                document.documentElement.mozRequestFullScreen();
+            } else if (document.documentElement.webkitRequestFullscreen) {
+                document.documentElement.webkitRequestFullscreen();
+            } else if (document.documentElement.msRequestFullscreen) {
+                document.documentElement.msRequestFullscreen();
+            }
+        `);
 
         try {
             const popupButton = await driver.wait(
@@ -183,6 +228,7 @@ export class Meeting {
         }
         return false;
     }
+    
     async isMeetingLive() {
         if (!this.driver) return null;
         try {
@@ -194,6 +240,7 @@ export class Meeting {
             return null;
         }
     }
+    
     async monitorMeetingLive() {
         while (this.driver && !this.isStopped) {
             if (await this.isRemovedFromMetting()) {
@@ -203,11 +250,13 @@ export class Meeting {
             }
             const cnt = await this.isMeetingLive();
             if (cnt != null && cnt == 1) {
+                console.log("\n \n \n No one in the meeting \n \n \n");
                 await this.stopRecording(); break;
             }
             await new Promise(resolve => setTimeout(resolve, 3000));
         }
     }
+    
     async monitorPopups() {
         if (!this.driver) return;
         const popupInterval = setInterval(async () => {
@@ -218,6 +267,7 @@ export class Meeting {
             await this.checkAndClosePopups();
         }, 10000)
     }
+    
     async checkAndClosePopups() {
         const popupTexts = ["Got it", "Dismiss", "OK", "Close", "Understood"];
         for (let text of popupTexts) {
@@ -235,11 +285,12 @@ export class Meeting {
             }
         }
     }
+    
     async isRemovedFromMetting() {
         if (!this.driver) return false;
         try {
             const removedMsg = await this.driver.findElement(
-                By.xpath('//*[contains(text(), "You’ve been removed") or contains(text(), "You have been removed")]'));
+                By.xpath('//*[contains(text(), "You\'ve been removed") or contains(text(), "You have been removed")]'));
             if (removedMsg) return true;
         } catch (error) {
             // continue
@@ -251,10 +302,12 @@ export class Meeting {
             return true;
         }
     }
+    
     async waitBeforeAdmission() {
         return new Promise((resolve) => setTimeout(resolve, 10000));
     }
+    
     async meetingTimer() {
         return new Promise((resolve) => setTimeout(resolve, this.duration))
     }
-}   
+}
