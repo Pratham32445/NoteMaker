@@ -5,6 +5,7 @@ import fs from "fs";
 import { saveToS3 } from './aws/storeToS3';
 
 export class Meeting {
+
     meetingId: string;
     driver: WebDriver | null;
     duration: number;
@@ -14,7 +15,7 @@ export class Meeting {
     botName: string;
     static ffmpegProcesses: { [meetingId: string]: any } = {};
     segmentFiles: string[] = [];
-    segmentIndex: number = 0;
+    segmentIndex: number = 0;   
 
     constructor(meetingId: string) {
         this.meetingId = meetingId;
@@ -202,7 +203,7 @@ export class Meeting {
             this.driver = null;
         }
 
-        console.log("\n \n \n all work done \n \n \n");
+        console.log("\n \n \n Recording finished \n \n \n");
     }
 
     async startMeet() {

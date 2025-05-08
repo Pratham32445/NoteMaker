@@ -1,16 +1,25 @@
 import { Meeting } from "./Meeting";
 import app from "./server";
 
+function startProcess() {
 
-(async () => {
+    const SLUG = process.env.SLUG;
+    const MEETING_ID = process.env.MEETING_ID;
+    if (!SLUG || !MEETING_ID) {
+        console.log("slug and meeting id is a required field");
+        process.exit(0);
+    }
+
+    console.log(SLUG,"slug is found");
+
     const newMeeting = new Meeting(process.env.MEETING_ID!);
 
-    app.post("/meeting/pause",async (req,res) => {
+    app.post(`/${SLUG}/meeting/pause`, async (req, res) => {
         await newMeeting.pauseRecording();
         res.send("Paused");
     })
 
-    app.post("/meeting/resume",async (req,res) => {
+    app.post(`/${SLUG}/meeting/resume`, async (req, res) => {
         await newMeeting.resumeRecording();
         res.send("Resume");
     })
@@ -21,4 +30,7 @@ import app from "./server";
         console.log("meeting finished");
         process.exit(0);
     })
-})()
+}
+
+
+startProcess();
