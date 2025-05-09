@@ -30,7 +30,7 @@ export class Meeting {
     getOutputFileName(segmentIndex: number): string {
         const ext = this.type === "VIDEO" ? "mp4" : "aac";
         return `/app/segments/${this.meetingId}_part${segmentIndex}.${ext}`;
-    }
+    }   
 
     async joinMeeting() {
         try {
