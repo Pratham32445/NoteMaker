@@ -8,7 +8,7 @@ RUN apt-get update && \
 
 USER seluser
 
-ENV DISPLAY=:99 \
+ENV DISPLAY=:99 \   
     SCREEN_RES=1280x720x24 \
     SE_NODE_OVERRIDE_MAX_SESSIONS=true \
     SE_NODE_MAX_SESSIONS=1
